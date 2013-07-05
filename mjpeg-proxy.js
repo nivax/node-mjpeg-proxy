@@ -36,12 +36,13 @@ function extractBoundary(contentType) {
   return contentType.substring(startIndex + 9, endIndex).replace(/"/gi,'');
 }
 
-var MjpegProxy = exports.MjpegProxy = function(mjpegUrl) {
+var MjpegProxy = exports.MjpegProxy = function(mjpegUrl, maxClients) {
   var self = this;
 
   if (!mjpegUrl) throw new Error('Please provide a source MJPEG URL');
 
   self.mjpegOptions = url.parse(mjpegUrl);
+  self.maxClients = maxClients || 0;
 
   self.audienceResponses = [];
   self.newAudienceResponses = [];
@@ -49,10 +50,27 @@ var MjpegProxy = exports.MjpegProxy = function(mjpegUrl) {
   self.boundary = null;
   self.globalMjpegResponse = null;
 
-  self.proxyRequest = function(req, res) {
+  self.closeStream = function() {
+    for (var i = self.audienceResponses.length; i--;) {
+      var res = self.audienceResponses[i];
+      res.end();
+    }
+    if(self.globalMjpegResponse != null) {
+      self.globalMjpegResponse.destroy();
+    }
+  };
 
+  self.proxyRequest = function(req, res) {
+    if(res.socket==null){
+      return;
+    }
     // There is already another client consuming the MJPEG response
     if (self.audienceResponses.length > 0) {
+      if (self.maxClients > 0 && self.audienceResponses.length >= self.maxClients) {
+          res.writeHead(500);
+          res.end('Max clients exceeded');
+          return;
+      }
       self._newClient(req, res);
     } else {
       // Send source MJPEG request
@@ -127,7 +145,7 @@ var MjpegProxy = exports.MjpegProxy = function(mjpegUrl) {
     self.audienceResponses.push(res);
     self.newAudienceResponses.push(res);
 
-    req.socket.on('close', function () {
+    res.socket.on('close', function () {
       // console.log('exiting client!');
 
       self.audienceResponses.splice(self.audienceResponses.indexOf(res), 1);
